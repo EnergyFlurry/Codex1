@@ -10,7 +10,7 @@
     intensity: 55,
     dropSize: 100,
     condensation: 60,
-    fog: 45,
+    fog: 55,
     storm: 25,
     scene: 'city',
     blur: 60,
@@ -29,7 +29,7 @@
     { key: 'intensity', label: 'Rain intensity', min: 0, max: 100, fmt: pct },
     { key: 'dropSize', label: 'Drop size', min: 50, max: 200, fmt: pct },
     { key: 'condensation', label: 'Condensation', min: 0, max: 100, fmt: pct },
-    { key: 'fog', label: 'Fogged glass', min: 0, max: 100, fmt: pct },
+    { key: 'fog', label: 'Window fog', min: 0, max: 100, fmt: function (v) { return v === 0 ? 'Clear' : v === 100 ? 'Fully fogged' : v + '%'; } },
     { key: 'storm', label: 'Thunderstorm', min: 0, max: 100, fmt: function (v) { return v === 0 ? 'Off' : v + '%'; } },
     { group: 'View' },
     { key: 'scene', label: 'Outside the window', type: 'select', options: Scenes.list.map(function (s) { return [s.id, s.name]; }) },
@@ -382,6 +382,10 @@
     }, 3500);
   }
   ['pointermove', 'pointerdown', 'keydown'].forEach(function (e) { window.addEventListener(e, poke, { passive: true }); });
+  // Mobile browsers can suspend audio; any tap brings it back.
+  ['pointerdown', 'touchend', 'keydown'].forEach(function (e) {
+    window.addEventListener(e, function () { audio.resume(); }, { passive: true });
+  });
 
   /* ---------------------------- Intro & audio ------------------------- */
   const intro = $('intro');
@@ -438,9 +442,8 @@
   });
 
   document.addEventListener('visibilitychange', function () {
-    if (!audio.ctx) return;
-    // Keep the ambience going in the background, but let the render loop rest.
     last = performance.now();
+    if (!document.hidden) audio.resume();
   });
 
   canvas.addEventListener('webglcontextlost', function (e) { e.preventDefault(); });

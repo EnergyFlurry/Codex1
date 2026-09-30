@@ -38,13 +38,24 @@
 
   AmbientAudio.prototype.start = function () {
     if (this.started) {
-      if (this.ctx.state === 'suspended') this.ctx.resume();
+      this.resume();
       return true;
     }
     const AC = global.AudioContext || global.webkitAudioContext;
     if (!AC) return false;
+    // iOS: treat this page as media playback, so the ringer/silent switch
+    // doesn't mute it (Safari 17+).
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* ignore */ }
     const ctx = this.ctx = new AC();
     this.started = true;
+    // Everything below must happen inside the user's tap to unlock audio on
+    // mobile: resume the context and play a tiny silent buffer right away.
+    if (ctx.resume) ctx.resume();
+    const unlock = ctx.createBufferSource();
+    unlock.buffer = ctx.createBuffer(1, 1, 22050);
+    unlock.connect(ctx.destination);
+    unlock.start(0);
+    this.startSilentElement();
 
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -16;
@@ -90,6 +101,43 @@
     const self = this;
     this.timer = setInterval(function () { self.tick(); }, 100);
     return true;
+  };
+
+  AmbientAudio.prototype.resume = function () {
+    if (!this.ctx) return;
+    if (this.ctx.state !== 'running' && this.ctx.resume) {
+      this.ctx.resume().catch(function () { /* needs another tap */ });
+    }
+    if (this.silentEl && this.silentEl.paused) {
+      const p = this.silentEl.play();
+      if (p && p.catch) p.catch(function () { /* ignore */ });
+    }
+  };
+
+  // Older iOS routes Web Audio through the ringer channel, which the silent
+  // switch mutes. A looping, silent <audio> element moves the page onto the
+  // media channel instead.
+  AmbientAudio.prototype.startSilentElement = function () {
+    try {
+      const rate = 8000, n = rate / 2;
+      const buf = new ArrayBuffer(44 + n);
+      const v = new DataView(buf);
+      const str = function (o, t) { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+      str(0, 'RIFF'); v.setUint32(4, 36 + n, true); str(8, 'WAVE');
+      str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+      v.setUint32(24, rate, true); v.setUint32(28, rate, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+      str(36, 'data'); v.setUint32(40, n, true);
+      for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);
+      const el = document.createElement('audio');
+      el.setAttribute('playsinline', '');
+      el.setAttribute('x-webkit-airplay', 'deny');
+      el.loop = true;
+      el.preload = 'auto';
+      el.src = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+      this.silentEl = el;
+      const p = el.play();
+      if (p && p.catch) p.catch(function () { /* not allowed here; Web Audio still works */ });
+    } catch (e) { /* ignore */ }
   };
 
   AmbientAudio.prototype.impulse = function (seconds, decay) {
