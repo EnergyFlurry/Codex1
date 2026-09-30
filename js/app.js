@@ -348,7 +348,11 @@
     const d = document;
     if (!d.fullscreenElement && !d.webkitFullscreenElement) {
       const el = d.documentElement;
-      (el.requestFullscreen || el.webkitRequestFullscreen || function () {}).call(el);
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) {
+        const r = req.call(el);
+        if (r && r.catch) r.catch(function () { /* not allowed here */ });
+      }
     } else {
       (d.exitFullscreen || d.webkitExitFullscreen || function () {}).call(d);
     }
