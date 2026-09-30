@@ -24,8 +24,12 @@
   const CAP = (1 - COS) / SIN;                 // centre height / base radius
   const RREF = 30;                              // CSS px radius whose cap height maps to alpha 1
   const FOG_DIV = 4;                            // fog map is 1/4 of the water map
-  const TAILS = [0.25, 0.5, 0.8, 1.1, 1.45];    // running-drop tail lengths, in body radii
-  const TAIL_W = 0.58;                          // width of the tail's rounded end
+  // Running-drop tail lengths (in body radii), finely stepped so shape changes
+  // read as continuous.
+  const TAILS = [];
+  for (let i = 0; i < 14; i++) TAILS.push(i * 0.1);
+  const MAX_R = 9.5;                            // CSS px: surface tension won't hold a bigger drop
+  const TAIL_W = 0.58;                          // width of a long tail's rounded end
 
   function rand(a, b) { return a + Math.random() * (b - a); }
 
@@ -57,11 +61,14 @@
   // A running drop: a round, heavy front and a shorter, narrower body
   // dragged behind it that ends in a rounded tip (a tapered capsule), so the
   // drop reads as one elongated bead of water. Body radius is 1 unit; the
-  // sprite spans x in [-1, 1] and y in [-(tail + TAIL_W), 1], with the front
+  // sprite spans x in [-1, 1] and y in [-(tail + end radius), 1], with the front
   // centred at y = 0.
   function makeTeardrop(tail) {
     const res = 32;
-    const top = tail + TAIL_W;
+    // Short tails stay nearly round, so a drop that starts to run doesn't
+    // visibly change shape.
+    const tw = 1 + (TAIL_W - 1) * Math.min(1, tail / 0.8);
+    const top = tail + tw;
     const c = document.createElement('canvas');
     c.width = res * 2;
     c.height = Math.round(res * (1 + top));
@@ -78,13 +85,13 @@
           d2 = x * x + y * y;
           scale = 1;
         } else if (y >= -tail) {
-          const w = 1 + (TAIL_W - 1) * smooth(-y / tail);
+          const w = 1 + (tw - 1) * smooth(-y / tail);
           d2 = (x / w) * (x / w);
           scale = Math.pow(w, 0.7);
         } else {
           const dy = y + tail;
-          d2 = (x * x + dy * dy) / (TAIL_W * TAIL_W);
-          scale = Math.pow(TAIL_W, 0.7);
+          d2 = (x * x + dy * dy) / (tw * tw);
+          scale = Math.pow(tw, 0.7);
         }
         let hgt = 0;
         if (d2 < 1) hgt = ((Math.sqrt(c0 * c0 - d2) - COS / SIN) / CAP) * scale;
@@ -94,6 +101,7 @@
       }
     }
     ctx.putImageData(img, 0, 0);
+    c.top = top;
     return c;
   }
 
@@ -170,9 +178,12 @@
   RainSim.prototype.makeDrop = function (x, y, r, k) {
     const d = {
       x: x, y: y, r: r,
+      vr: r * 0.7,              // drawn radius, eases toward r so sizes never snap
+      tailF: 0,                 // smoothed tail length, 0..1
+      into: null,               // drop this one is flowing into while merging
       vy: 0, drift: 0, ang: 0,
       moving: false,
-      thr: rand(8, 11.5) * k,
+      thr: rand(6.5, 8.5) * k,
       sx: rand(0.88, 1.12), sy: rand(0.88, 1.12),
       shape: rand(0.85, 1.15),
       trail: 0,
@@ -184,7 +195,7 @@
 
   RainSim.prototype.spawnDrop = function (s, x, y, quiet) {
     const k = this.sizeK(s);
-    const r = (2.2 + Math.pow(Math.random(), 2.2) * 12) * k;
+    const r = (1.8 + Math.pow(Math.random(), 2.4) * 7) * k;
     const d = this.makeDrop(x, y, r, k);
     if (!quiet) {
       // The impact throws off a spray of micro droplets.
@@ -256,6 +267,18 @@
       const d = drops[i];
       if (d.dead) continue;
 
+      if (d.into) {
+        // Being absorbed: slide into the other drop and shrink away.
+        const t = d.into;
+        const f = Math.min(1, 0.35 * dt);
+        d.x += (t.x - d.x) * f;
+        d.y += (t.y - d.y) * f;
+        d.vr *= Math.pow(0.72, dt);
+        if (t.dead || d.vr < 0.4 * k) d.dead = true;
+        continue;
+      }
+      d.vr += (d.r - d.vr) * Math.min(1, 0.1 * dt);
+
       if (!d.moving) {
         // Tiny amount of evaporation on still water.
         d.r -= 0.0006 * k * dt;
@@ -270,7 +293,7 @@
 
       const massF = d.r / d.thr;
       // Stick-slip: drops hesitate on dry glass, then lurch forward.
-      if (Math.random() < 0.035 * dt / Math.max(0.6, massF)) d.vy *= 0.1;
+      if (Math.random() < 0.035 * dt / Math.max(0.6, massF)) d.vy *= 0.35;
       d.vy += 0.035 * this.k * Math.min(2.5, massF) * dt;
       const vmax = (0.35 + Math.min(2.5, massF) * 1.15) * this.k;
       if (d.vy > vmax) d.vy = vmax;
@@ -283,9 +306,10 @@
       d.y += d.vy * dt;
       // The tail trails along the actual direction of travel.
       d.ang += (Math.atan2(-d.drift, 1) - d.ang) * Math.min(1, 0.15 * dt);
+      d.tailF += (this.tailTarget(d) - d.tailF) * Math.min(1, 0.05 * dt);
 
       // Clear the condensation and fog along the path.
-      mc.lineWidth = d.r * 2 * d.sx;
+      mc.lineWidth = d.vr * 2 * d.sx;
       mc.beginPath(); mc.moveTo(px, py); mc.lineTo(d.x, d.y); mc.stroke();
       fc.lineWidth = (d.r * 2.3) / FOG_DIV;
       fc.beginPath(); fc.moveTo(px / FOG_DIV, py / FOG_DIV); fc.lineTo(d.x / FOG_DIV, d.y / FOG_DIV); fc.stroke();
@@ -296,13 +320,12 @@
         d.trail = 0;
         const tr = d.r * rand(0.16, 0.34);
         if (tr > 0.6 * k) {
-          const tail = TAILS[this.tailIndex(d)];
-          const back = d.r * (tail * d.shape + TAIL_W + rand(0.4, 0.8));
+          const back = d.vr * (this.teardrops[this.tailIndex(d)].top * d.shape + rand(0.4, 0.8));
           trailSpawn.push({ x: d.x + Math.sin(d.ang) * back + (Math.random() - 0.5) * d.r * 0.3, y: d.y - Math.cos(d.ang) * back, r: tr });
           d.r = Math.cbrt(Math.max(0, d.r * d.r * d.r - tr * tr * tr));
         }
       }
-      if (d.r < d.thr * 0.45) { d.moving = false; d.vy = 0; d.thr *= 1.08; }
+      if (d.r < d.thr * 0.45) { d.moving = false; d.vy = 0; d.thr = Math.min(d.thr * 1.08, MAX_R * k * 0.95); }
       if (d.y - d.r * 2 > this.H) d.dead = true;
     }
     mc.globalCompositeOperation = 'source-over';
@@ -337,7 +360,7 @@
     const grid = new Map();
     for (let i = 0; i < drops.length; i++) {
       const d = drops[i];
-      if (d.dead) continue;
+      if (d.dead || d.into) continue;
       const key = Math.floor(d.y / cell) * cols + Math.floor(d.x / cell);
       let bucket = grid.get(key);
       if (!bucket) { bucket = []; grid.set(key, bucket); }
@@ -345,7 +368,7 @@
     }
     for (let i = 0; i < drops.length; i++) {
       const a = drops[i];
-      if (a.dead) continue;
+      if (a.dead || a.into) continue;
       const cx = Math.floor(a.x / cell), cy = Math.floor(a.y / cell);
       for (let oy = -1; oy <= 1; oy++) {
         for (let ox = -1; ox <= 1; ox++) {
@@ -353,7 +376,7 @@
           if (!bucket) continue;
           for (let j = 0; j < bucket.length; j++) {
             const b = bucket[j];
-            if (b === a || b.dead || a.dead) continue;
+            if (b === a || b.dead || a.dead || b.into || a.into) continue;
             const dx = b.x - a.x, dy = b.y - a.y;
             // Water joins as soon as the edges touch.
             const reach = (a.r + b.r) * 0.95;
@@ -366,14 +389,18 @@
             if (big.moving && !small.moving && small.y < big.y - big.r * 0.4) continue;
             const v1 = big.r * big.r * big.r, v2 = small.r * small.r * small.r;
             if (!big.moving) {
-              big.x = (big.x * v1 + small.x * v2) / (v1 + v2);
-              big.y = (big.y * v1 + small.y * v2) / (v1 + v2);
+              // Nudge toward the combined centre of mass; the drawn size
+              // catches up smoothly.
+              const f = v2 / (v1 + v2) * 0.5;
+              big.x += (small.x - big.x) * f;
+              big.y += (small.y - big.y) * f;
             } else {
-              big.x += (small.x - big.x) * 0.15;
-              big.vy *= 1.04;
+              big.x += (small.x - big.x) * 0.08;
+              big.vy *= 1.03;
             }
-            big.r = Math.cbrt(v1 + v2);
-            small.dead = true;
+            // Beyond a few millimetres the extra water just runs off.
+            big.r = Math.min(Math.cbrt(v1 + v2), MAX_R * k);
+            small.into = big;
           }
         }
       }
@@ -385,8 +412,8 @@
   RainSim.prototype.addWater = function (xCss, yCss, s) {
     const k = this.sizeK(s);
     const x = xCss * this.k, y = yCss * this.k;
-    const main = this.makeDrop(x, y, rand(10, 14) * k, k);
-    main.thr = main.r * rand(0.9, 1.05);
+    const main = this.makeDrop(x, y, rand(8.5, MAX_R) * k, k);
+    main.thr = main.r * 0.92;
     const n = 5 + ((Math.random() * 6) | 0);
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, dist = rand(16, 42) * k;
@@ -402,9 +429,13 @@
     if (this.onImpact) this.onImpact(14, x / this.W);
   };
 
+  RainSim.prototype.tailTarget = function (d) {
+    const f = d.vy / (3 * this.k) + (d.r / d.thr - 1) * 0.4;
+    return Math.max(0, Math.min(1, f));
+  };
+
   RainSim.prototype.tailIndex = function (d) {
-    const f = d.vy / (2.6 * this.k) + (d.r / d.thr - 1) * 0.5;
-    return Math.max(0, Math.min(TAILS.length - 1, Math.floor(f * TAILS.length)));
+    return Math.round(d.tailF * (TAILS.length - 1));
   };
 
   // Wipe the glass with a finger / cursor between two points (CSS px).
@@ -455,17 +486,19 @@
     const drops = this.drops;
     for (let i = 0; i < drops.length; i++) {
       const d = drops[i];
-      const rx = d.r * d.sx, ry = d.r * d.sy;
-      const sprite = d.r < 6 ? this.smallSprite : this.sprite;
-      c.globalAlpha = this.alphaFor(d.r, s);
-      if (d.moving) {
-        // One continuous teardrop whose tail grows with speed.
+      const r = d.vr;
+      const rx = r * d.sx, ry = r * d.sy;
+      const sprite = r < 6 ? this.smallSprite : this.sprite;
+      c.globalAlpha = this.alphaFor(r, s);
+      if (d.moving && !d.into) {
+        // One continuous teardrop whose tail eases longer with speed.
         const ti = this.tailIndex(d);
-        const top = TAILS[ti] * d.shape + TAIL_W;
-        const bw = d.r * d.sx * (1 - ti * 0.02);
+        const spr = this.teardrops[ti];
+        const top = 1 + (spr.top - 1) * d.shape;
+        const bw = r * d.sx * (1 - d.tailF * 0.08);
         c.setTransform(1, 0, 0, 1, d.x, d.y);
         c.rotate(d.ang);
-        c.drawImage(this.teardrops[ti], -bw, -bw * top, bw * 2, bw * (1 + top));
+        c.drawImage(spr, -bw, -bw * top, bw * 2, bw * (1 + top));
         c.setTransform(1, 0, 0, 1, 0, 0);
       } else {
         c.drawImage(sprite, d.x - rx, d.y - ry, rx * 2, ry * 2);
