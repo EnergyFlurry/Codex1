@@ -129,7 +129,7 @@
     '  float hd = texture2D(uWater, uv + vec2(0.0, uWaterTexel.y)).a;',
     '  vec2 slope = vec2(hr - hl, hd - hu) * 0.5 * uHeightScale;',
     '  vec3 n = normalize(vec3(-slope, 1.0));',
-    '  float mask = smoothstep(1.5 / 255.0, 7.0 / 255.0, h);',
+    '  float mask = smoothstep(3.5 / 255.0, 9.0 / 255.0, h);',
     '',
     // ---- Glass between the drops: blurred scene, rain, fog.
     '  vec3 bg = texture2D(uBgBlur, uv).rgb * 1.15;',

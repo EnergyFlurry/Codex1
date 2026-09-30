@@ -23,6 +23,9 @@
   const SIN = Math.sin(CONTACT_ANGLE), COS = Math.cos(CONTACT_ANGLE);
   const CAP = (1 - COS) / SIN;                 // centre height / base radius
   const RREF = 30;                              // CSS px radius whose cap height maps to alpha 1
+  // The condensation canvas stores heights 4x amplified so it can evaporate in
+  // fine, smooth steps despite 8-bit precision.
+  const MIST_GAIN = 4;
   const FOG_DIV = 4;                            // fog map is 1/4 of the water map
   // Running-drop tail lengths (in body radii), finely stepped so shape changes
   // read as continuous.
@@ -170,7 +173,7 @@
     const k = this.sizeK(s);
     r = r || (0.9 + Math.pow(Math.random(), 2.2) * 2.6) * k;
     const c = this.mctx;
-    c.globalAlpha = this.alphaFor(r, s);
+    c.globalAlpha = Math.min(1, this.alphaFor(r, s) * MIST_GAIN);
     const sx = r * rand(0.85, 1.15), sy = r * rand(0.85, 1.15);
     c.drawImage(r < 6 ? this.smallSprite : this.sprite, x - sx, y - sy, sx * 2, sy * 2);
   };
@@ -234,12 +237,13 @@
     }
     mc.globalAlpha = 1;
 
-    // Evaporation: fade the condensation layer a little every second.
+    // Evaporation: the condensation layer thins out in small, frequent steps
+    // so droplets fade away rather than blinking out.
     this.evapTimer += dtMs;
-    if (this.evapTimer > 1000) {
+    if (this.evapTimer > 400) {
       this.evapTimer = 0;
       mc.globalCompositeOperation = 'destination-out';
-      mc.fillStyle = 'rgba(0,0,0,' + (0.05 + (1 - s.condensation) * 0.12) + ')';
+      mc.fillStyle = 'rgba(0,0,0,' + (0.035 + (1 - s.condensation) * 0.05) + ')';
       mc.fillRect(0, 0, this.W, this.H);
     }
 
@@ -280,9 +284,15 @@
       d.vr += (d.r - d.vr) * Math.min(1, 0.1 * dt);
 
       if (!d.moving) {
+        if (d.fading) {
+          // Evaporating: shrink away smoothly, leaving a breath of mist.
+          d.r *= Math.pow(0.99, dt);
+          if (d.vr < 0.3 * k) { this.fogPuff(d.x, d.y, k); d.dead = true; }
+          continue;
+        }
         // Tiny amount of evaporation on still water.
         d.r -= 0.0006 * k * dt;
-        if (d.r < 0.5 * k) { d.dead = true; continue; }
+        if (d.r < 0.8 * k) { d.fading = true; continue; }
         if (d.r > d.thr) {
           d.moving = true;
           d.vy = 0.1 * this.k;
@@ -341,13 +351,13 @@
 
     // Compact the array and keep the total count bounded.
     const maxDrops = Math.max(400, Math.min(3000, Math.round(1500 * area)));
-    let alive = drops.filter(function (d) { return !d.dead; });
-    if (alive.length > maxDrops) {
-      let excess = alive.length - maxDrops;
-      for (let i = 0; i < alive.length && excess > 0; i++) {
-        if (!alive[i].moving) { alive[i].dead = true; excess--; }
-      }
-      alive = alive.filter(function (d) { return !d.dead; });
+    const alive = drops.filter(function (d) { return !d.dead; });
+    let active = 0;
+    for (let i = 0; i < alive.length; i++) if (!alive[i].fading && !alive[i].into) active++;
+    // Over budget: the oldest still drops start to evaporate.
+    for (let i = 0; i < alive.length && active > maxDrops; i++) {
+      const d = alive[i];
+      if (!d.moving && !d.fading && !d.into) { d.fading = true; active--; }
     }
     this.drops = alive;
   };
@@ -388,6 +398,7 @@
             // A running drop doesn't reach back for beads in its own tail.
             if (big.moving && !small.moving && small.y < big.y - big.r * 0.4) continue;
             const v1 = big.r * big.r * big.r, v2 = small.r * small.r * small.r;
+            big.fading = false;
             if (!big.moving) {
               // Nudge toward the combined centre of mass; the drawn size
               // catches up smoothly.
@@ -427,6 +438,16 @@
     this.mctx.globalAlpha = 1;
     this.mctx.globalCompositeOperation = 'source-over';
     if (this.onImpact) this.onImpact(14, x / this.W);
+  };
+
+  // Water that evaporates from a drop fogs the glass around where it sat.
+  RainSim.prototype.fogPuff = function (x, y, k) {
+    const fc = this.fctx;
+    fc.globalCompositeOperation = 'source-over';
+    fc.fillStyle = 'rgba(255,255,255,0.3)';
+    fc.beginPath();
+    fc.arc(x / FOG_DIV, y / FOG_DIV, Math.max(1.5, (5 * k) / FOG_DIV), 0, Math.PI * 2);
+    fc.fill();
   };
 
   RainSim.prototype.tailTarget = function (d) {
@@ -481,7 +502,9 @@
     const c = this.wctx;
     c.globalAlpha = 1;
     c.globalCompositeOperation = 'copy';
+    c.globalAlpha = 1 / MIST_GAIN;
     c.drawImage(this.mist, 0, 0);
+    c.globalAlpha = 1;
     c.globalCompositeOperation = 'lighter';
     const drops = this.drops;
     for (let i = 0; i < drops.length; i++) {
