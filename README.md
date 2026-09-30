@@ -22,7 +22,8 @@ Click **Start with sound** (browsers only allow audio after a click).
 ## Controls
 
 - **Settings** (the gear button or `S`): rain intensity, drop size, condensation, window fog, thunderstorm frequency, scene, depth of field, refraction, brightness, window frame, quality, and separate volume sliders for master, rain, music and thunder. Settings are saved in your browser.
-- **Drag on the glass** to wipe it with your finger or cursor.
+- **Tap or click the glass** to throw a splash of water on it.
+- **Press and drag** to wipe the glass with your finger or cursor.
 - `M` mutes the sound, `F` toggles fullscreen, `Space` pauses the rain and `H` hides the UI.
 
 ## Files

@@ -24,7 +24,8 @@
   const CAP = (1 - COS) / SIN;                 // centre height / base radius
   const RREF = 30;                              // CSS px radius whose cap height maps to alpha 1
   const FOG_DIV = 4;                            // fog map is 1/4 of the water map
-  const TAILS = [0.35, 0.8, 1.3, 1.9, 2.6];     // teardrop tail lengths, in body radii
+  const TAILS = [0.25, 0.5, 0.8, 1.1, 1.45];    // running-drop tail lengths, in body radii
+  const TAIL_W = 0.58;                          // width of the tail's rounded end
 
   function rand(a, b) { return a + Math.random() * (b - a); }
 
@@ -53,28 +54,37 @@
     return c;
   }
 
-  // A running drop: a round, heavy front with a tapering tail dragged behind
-  // it. Body radius is 1 unit; the sprite spans x in [-1, 1] and y in
-  // [-tail, 1], with the body centred at y = 0.
+  // A running drop: a round, heavy front and a shorter, narrower body
+  // dragged behind it that ends in a rounded tip (a tapered capsule), so the
+  // drop reads as one elongated bead of water. Body radius is 1 unit; the
+  // sprite spans x in [-1, 1] and y in [-(tail + TAIL_W), 1], with the front
+  // centred at y = 0.
   function makeTeardrop(tail) {
     const res = 32;
+    const top = tail + TAIL_W;
     const c = document.createElement('canvas');
     c.width = res * 2;
-    c.height = Math.round(res * (1 + tail));
+    c.height = Math.round(res * (1 + top));
     const ctx = c.getContext('2d');
     const img = ctx.createImageData(c.width, c.height);
     const c0 = 1 / SIN;
+    const smooth = function (t) { return t * t * (3 - 2 * t); };
     for (let py = 0; py < c.height; py++) {
-      const y = (py + 0.5) / res - tail;
+      const y = (py + 0.5) / res - top;
       for (let px = 0; px < c.width; px++) {
         const x = (px + 0.5) / res - 1;
-        let d2, scale = 1;
+        let d2, scale;
         if (y >= 0) {
           d2 = x * x + y * y;
+          scale = 1;
+        } else if (y >= -tail) {
+          const w = 1 + (TAIL_W - 1) * smooth(-y / tail);
+          d2 = (x / w) * (x / w);
+          scale = Math.pow(w, 0.7);
         } else {
-          const w = Math.sin((1 + y / tail) * Math.PI / 2);
-          d2 = w > 0.001 ? (x / w) * (x / w) : 2;
-          scale = Math.pow(w, 0.8);
+          const dy = y + tail;
+          d2 = (x * x + dy * dy) / (TAIL_W * TAIL_W);
+          scale = Math.pow(TAIL_W, 0.7);
         }
         let hgt = 0;
         if (d2 < 1) hgt = ((Math.sqrt(c0 * c0 - d2) - COS / SIN) / CAP) * scale;
@@ -157,20 +167,25 @@
     c.drawImage(r < 6 ? this.smallSprite : this.sprite, x - sx, y - sy, sx * 2, sy * 2);
   };
 
-  RainSim.prototype.spawnDrop = function (s, x, y, quiet) {
-    const k = this.sizeK(s);
-    const r = (2.2 + Math.pow(Math.random(), 2.2) * 12) * k;
+  RainSim.prototype.makeDrop = function (x, y, r, k) {
     const d = {
       x: x, y: y, r: r,
-      vx: 0, vy: 0, drift: 0,
+      vy: 0, drift: 0, ang: 0,
       moving: false,
       thr: rand(8, 11.5) * k,
       sx: rand(0.88, 1.12), sy: rand(0.88, 1.12),
+      shape: rand(0.85, 1.15),
       trail: 0,
-      born: performance.now(),
       dead: false
     };
     this.drops.push(d);
+    return d;
+  };
+
+  RainSim.prototype.spawnDrop = function (s, x, y, quiet) {
+    const k = this.sizeK(s);
+    const r = (2.2 + Math.pow(Math.random(), 2.2) * 12) * k;
+    const d = this.makeDrop(x, y, r, k);
     if (!quiet) {
       // The impact throws off a spray of micro droplets.
       if (r > 4 * k) {
@@ -247,22 +262,27 @@
         if (d.r < 0.5 * k) { d.dead = true; continue; }
         if (d.r > d.thr) {
           d.moving = true;
-          d.vy = 0.2 * this.k;
-          d.drift = rand(-0.25, 0.25);
+          d.vy = 0.1 * this.k;
+          d.drift = rand(-0.3, 0.3);
+          d.ang = 0;
         } else continue;
       }
 
       const massF = d.r / d.thr;
       // Stick-slip: drops hesitate on dry glass, then lurch forward.
-      if (Math.random() < 0.03 * dt / Math.max(0.6, massF)) d.vy *= 0.12;
-      d.vy += 0.1 * this.k * Math.min(2.5, massF) * dt;
-      const vmax = (1.2 + Math.min(2.5, massF) * 3.2) * this.k;
+      if (Math.random() < 0.035 * dt / Math.max(0.6, massF)) d.vy *= 0.1;
+      d.vy += 0.035 * this.k * Math.min(2.5, massF) * dt;
+      const vmax = (0.35 + Math.min(2.5, massF) * 1.15) * this.k;
       if (d.vy > vmax) d.vy = vmax;
-      d.drift += (Math.random() - 0.5) * 0.12 * dt;
-      d.drift *= 0.97;
+      // Wander sideways a little as the drop finds its way down the glass.
+      d.drift += (Math.random() - 0.5) * 0.09 * dt;
+      d.drift *= 0.985;
+      if (d.drift > 0.55) d.drift = 0.55; else if (d.drift < -0.55) d.drift = -0.55;
       const px = d.x, py = d.y;
-      d.x += d.drift * d.vy * 0.35 * dt;
+      d.x += d.drift * d.vy * dt;
       d.y += d.vy * dt;
+      // The tail trails along the actual direction of travel.
+      d.ang += (Math.atan2(-d.drift, 1) - d.ang) * Math.min(1, 0.15 * dt);
 
       // Clear the condensation and fog along the path.
       mc.lineWidth = d.r * 2 * d.sx;
@@ -277,7 +297,8 @@
         const tr = d.r * rand(0.16, 0.34);
         if (tr > 0.6 * k) {
           const tail = TAILS[this.tailIndex(d)];
-          trailSpawn.push({ x: d.x + (Math.random() - 0.5) * d.r * 0.4, y: d.y - d.r * (tail + rand(0.5, 0.9)), r: tr });
+          const back = d.r * (tail * d.shape + TAIL_W + rand(0.4, 0.8));
+          trailSpawn.push({ x: d.x + Math.sin(d.ang) * back + (Math.random() - 0.5) * d.r * 0.3, y: d.y - Math.cos(d.ang) * back, r: tr });
           d.r = Math.cbrt(Math.max(0, d.r * d.r * d.r - tr * tr * tr));
         }
       }
@@ -289,11 +310,8 @@
 
     for (let i = 0; i < trailSpawn.length; i++) {
       const t = trailSpawn[i];
-      drops.push({
-        x: t.x, y: t.y, r: t.r, vx: 0, vy: 0, drift: 0, moving: false,
-        thr: rand(8, 11.5) * k, sx: rand(0.85, 1.1), sy: rand(0.9, 1.25),
-        trail: 0, born: performance.now(), dead: false
-      });
+      const b = this.makeDrop(t.x, t.y, t.r, k);
+      b.sy = rand(0.95, 1.3);
     }
 
     this.collide(k);
@@ -362,8 +380,30 @@
     }
   };
 
+  // A splash of water thrown at the glass (CSS px): one heavy drop that will
+  // soon run, a ring of smaller drops and a fine spray.
+  RainSim.prototype.addWater = function (xCss, yCss, s) {
+    const k = this.sizeK(s);
+    const x = xCss * this.k, y = yCss * this.k;
+    const main = this.makeDrop(x, y, rand(10, 14) * k, k);
+    main.thr = main.r * rand(0.9, 1.05);
+    const n = 5 + ((Math.random() * 6) | 0);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, dist = rand(16, 42) * k;
+      this.makeDrop(x + Math.cos(a) * dist, y + Math.sin(a) * dist, rand(2, 6) * k, k);
+    }
+    this.mctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 70; i++) {
+      const a = Math.random() * Math.PI * 2, dist = Math.pow(Math.random(), 0.7) * 70 * k;
+      this.addMist(x + Math.cos(a) * dist, y + Math.sin(a) * dist, s);
+    }
+    this.mctx.globalAlpha = 1;
+    this.mctx.globalCompositeOperation = 'source-over';
+    if (this.onImpact) this.onImpact(14, x / this.W);
+  };
+
   RainSim.prototype.tailIndex = function (d) {
-    const f = d.vy / (5 * this.k) + (d.r / d.thr - 1) * 0.6;
+    const f = d.vy / (2.6 * this.k) + (d.r / d.thr - 1) * 0.5;
     return Math.max(0, Math.min(TAILS.length - 1, Math.floor(f * TAILS.length)));
   };
 
@@ -421,9 +461,12 @@
       if (d.moving) {
         // One continuous teardrop whose tail grows with speed.
         const ti = this.tailIndex(d);
-        const tail = TAILS[ti];
-        const bw = d.r * (1 - ti * 0.02);
-        c.drawImage(this.teardrops[ti], d.x - bw, d.y - bw * tail, bw * 2, bw * (1 + tail));
+        const top = TAILS[ti] * d.shape + TAIL_W;
+        const bw = d.r * d.sx * (1 - ti * 0.02);
+        c.setTransform(1, 0, 0, 1, d.x, d.y);
+        c.rotate(d.ang);
+        c.drawImage(this.teardrops[ti], -bw, -bw * top, bw * 2, bw * (1 + top));
+        c.setTransform(1, 0, 0, 1, 0, 0);
       } else {
         c.drawImage(sprite, d.x - rx, d.y - ry, rx * 2, ry * 2);
       }

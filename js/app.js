@@ -405,24 +405,35 @@
   $('start').addEventListener('click', function (e) { e.stopPropagation(); dismissIntro(true); });
   $('start-silent').addEventListener('click', function (e) { e.stopPropagation(); dismissIntro(false); });
 
-  /* ---------------------------- Wiping the glass ---------------------- */
-  let wiping = null;
+  /* ------------------- Tap to add water, drag to wipe ---------------- */
+  // A quick tap throws a splash of water on the glass; pressing and dragging
+  // wipes it like a finger would.
+  const DRAG_START = 10; // px of movement before a press becomes a wipe
+  let press = null;
   canvas.addEventListener('pointerdown', function (e) {
     if (!intro.classList.contains('is-hidden')) return;
-    if (panel.classList.contains('is-open')) setPanel(false);
-    wiping = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    if (panel.classList.contains('is-open')) { setPanel(false); return; }
+    press = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, id: e.pointerId, wiping: false };
     canvas.setPointerCapture(e.pointerId);
-    sim.wipe(e.clientX, e.clientY, e.clientX + 0.1, e.clientY, wipeRadius());
   });
   canvas.addEventListener('pointermove', function (e) {
-    if (!wiping || wiping.id !== e.pointerId) return;
-    sim.wipe(wiping.x, wiping.y, e.clientX, e.clientY, wipeRadius());
-    wiping.x = e.clientX;
-    wiping.y = e.clientY;
+    if (!press || press.id !== e.pointerId) return;
+    if (!press.wiping) {
+      if (Math.hypot(e.clientX - press.x0, e.clientY - press.y0) < DRAG_START) return;
+      press.wiping = true;
+    }
+    sim.wipe(press.x, press.y, e.clientX, e.clientY, wipeRadius());
+    press.x = e.clientX;
+    press.y = e.clientY;
   });
-  function endWipe(e) { if (wiping && wiping.id === e.pointerId) wiping = null; }
-  canvas.addEventListener('pointerup', endWipe);
-  canvas.addEventListener('pointercancel', endWipe);
+  canvas.addEventListener('pointerup', function (e) {
+    if (!press || press.id !== e.pointerId) return;
+    if (!press.wiping) sim.addWater(press.x0, press.y0, simSettings());
+    press = null;
+  });
+  canvas.addEventListener('pointercancel', function (e) {
+    if (press && press.id === e.pointerId) press = null;
+  });
   function wipeRadius() { return Math.max(18, Math.min(34, Math.min(cssW, cssH) * 0.03)); }
 
   /* ---------------------------- Keyboard ------------------------------ */
